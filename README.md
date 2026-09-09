@@ -261,6 +261,10 @@ Produces a finished, standalone VM under `packer/output/`. Downloads Kali's
 official prebuilt image first if you don't already have one -- see
 `packer/README.md`.
 
+Once Packer clones the VM you will need to manually log into `kali` and run
+`sudo systemctl enable --now ssh` to start the SSH service before Packer can
+connect.
+
 ### Option B -- provision an existing Kali box directly
 
 Escalation uses `su` (`ansible.cfg`), not `sudo` -- it needs root's own
