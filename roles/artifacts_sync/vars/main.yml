@@ -1,0 +1,18 @@
+---
+# Payload tarballs built by scripts/snapshot.sh. These hold the files that cannot
+# be re-derived from a package manager or a git remote: Windows post-ex binaries
+# and loose scripts.
+artifact_payloads:
+  - name: downloads
+    archive: "downloads.tar.zst"
+    dest: "{{ ansible_env.HOME }}"
+    creates: "{{ ansible_env.HOME }}/Downloads/windows/mimikatz.exe"
+  - name: local_debs
+    archive: "local-debs.tar.zst"
+    dest: "{{ ansible_env.HOME }}/tools"
+    creates: "{{ ansible_env.HOME }}/tools/ad1tools_1.0.0-1_amd64.deb"
+
+# Packages installed from a .deb with no upstream apt repo. The .deb travels in
+# the local-debs payload above.
+apt_local_debs:
+  - { name: ad1tools, path: "{{ ansible_env.HOME }}/tools/ad1tools_1.0.0-1_amd64.deb" }

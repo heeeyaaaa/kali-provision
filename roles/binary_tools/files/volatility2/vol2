@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Wrapper for the blacktop/volatility Docker image
+# (github.com/blacktop/docker-volatility) -- bind-mounts the current
+# directory into the container so `vol2 -f memory.dmp --profile=... pslist`
+# works the same way the native vol.py invocation would, from wherever your
+# memory image actually lives.
+exec docker run --rm -it -v "$PWD":/data blacktop/volatility:latest "$@"

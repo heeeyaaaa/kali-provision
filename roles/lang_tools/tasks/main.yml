@@ -1,0 +1,37 @@
+---
+- name: Ensure Rust and Go toolchains are present
+  become: true
+  ansible.builtin.apt:
+    name:
+      - cargo
+      - rustc
+      - golang-go
+    state: present
+
+- name: Install cargo crates
+  ansible.builtin.command:
+    cmd: "cargo install --locked {{ item.crate }}"
+    creates: "{{ cargo_bin_dir }}/{{ item.bin }}"
+  loop: "{{ cargo_crates | rejectattr('bin', 'in', exclude_tools) | rejectattr('crate', 'in', exclude_tools) | list }}"
+  loop_control:
+    label: "{{ item.crate }}"
+  register: cargo_result
+  failed_when: false
+
+- name: Install go packages
+  ansible.builtin.command:
+    cmd: "go install {{ item.pkg }}"
+    creates: "{{ go_bin_dir }}/{{ item.bin }}"
+  environment:
+    GOBIN: "{{ go_bin_dir }}"
+  loop: "{{ go_packages | rejectattr('bin', 'in', exclude_tools) | list }}"
+  loop_control:
+    label: "{{ item.pkg }}"
+  register: go_result
+  failed_when: false
+
+- name: Report toolchain installs that failed
+  ansible.builtin.debug:
+    msg:
+      cargo: "{{ cargo_result.results | selectattr('rc', 'defined') | selectattr('rc', 'ne', 0) | map(attribute='item.crate') | list }}"
+      go: "{{ go_result.results | selectattr('rc', 'defined') | selectattr('rc', 'ne', 0) | map(attribute='item.pkg') | list }}"

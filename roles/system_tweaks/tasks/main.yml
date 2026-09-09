@@ -1,0 +1,27 @@
+---
+- name: Install a compat ntpdate for manual clock sync (e.g. against a target DC)
+  # ntpdate itself was dropped from Debian/Kali in favor of ntpsec/chrony;
+  # ntpsec-ntpdate ships the current compatible command.
+  become: true
+  block:
+    - name: Try ntpsec-ntpdate (current Debian/Kali ntpdate replacement)
+      ansible.builtin.apt:
+        name: ntpsec-ntpdate
+        state: present
+  rescue:
+    - name: Fall back to the legacy ntpdate package name
+      ansible.builtin.apt:
+        name: ntpdate
+        state: present
+      failed_when: false
+
+# Disable the default automatic time handler so it does not fight a manual
+# `sudo ntpdate <dc-ip>` -- essential for Kerberos when the box clock must match
+# the domain controller rather than an internet NTP source.
+- name: Disable and stop systemd-timesyncd (the default time handler)
+  become: true
+  ansible.builtin.systemd_service:
+    name: systemd-timesyncd
+    enabled: false
+    state: stopped
+  failed_when: false

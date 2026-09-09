@@ -1,0 +1,93 @@
+---
+- name: Ensure pipx is installed
+  become: true
+  ansible.builtin.apt:
+    name: pipx
+    state: present
+
+- name: Ensure pipx bin dir is on PATH
+  ansible.builtin.command: pipx ensurepath
+  register: pipx_path
+  changed_when: "'added' in pipx_path.stdout | lower"
+
+- name: Install pipx applications
+  community.general.pipx:
+    name: "{{ item.name }}"
+    state: latest
+  # donpapi/sccmhunter/netexec get their own dedicated git-source install
+  # below instead (no PyPI package resolves under these names) -- rejected
+  # here explicitly rather than via exclude_tools, so exclude_tools stays
+  # free without colliding with the dedicated task below.
+  loop: "{{ pipx_packages | rejectattr('name', 'in', exclude_tools) | rejectattr('name', 'in', ['donpapi', 'sccmhunter', 'netexec']) | list }}"
+  loop_control:
+    label: "{{ item.name }} (was {{ item.seen_version }})"
+  register: pipx_result
+  failed_when: false
+
+- name: Report pipx applications that failed to install
+  ansible.builtin.debug:
+    msg: >-
+      pipx install failed for:
+      {{ pipx_result.results | selectattr('failed', 'defined') | selectattr('failed')
+         | map(attribute='item.name') | list }}
+  when: pipx_result.results | selectattr('failed', 'defined') | selectattr('failed') | list | length > 0
+
+- name: Inject click and tabulate into regipy's venv
+  # regipy's own package metadata doesn't declare these as hard dependencies
+  # even though every regipy-* entry point needs them.
+  community.general.pipx:
+    name: regipy
+    state: inject
+    inject_packages:
+      - click
+      - tabulate
+  when: "'regipy' not in exclude_tools"
+  failed_when: false
+
+- name: Purge the stale apt netexec/nxc already in the base image
+  become: true
+  ansible.builtin.apt:
+    name: netexec
+    state: absent
+    purge: true
+  failed_when: false
+  # Kali's apt netexec lags upstream; the current release from GitHub via
+  # pipx (below) is the preferred path.
+
+- name: Install donpapi, sccmhunter, and netexec from their GitHub repos via pipx
+  community.general.pipx:
+    name: "{{ item.name }}"
+    source: "{{ item.source }}"
+    state: install
+  loop:
+    - { name: donpapi, source: "git+https://github.com/login-securite/DonPAPI.git" }
+    - { name: sccmhunter, source: "git+https://github.com/garrettfoster13/sccmhunter/" }
+    - { name: netexec, source: "git+https://github.com/Pennyw0rth/NetExec" }
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.name not in exclude_tools
+  register: pipx_git_result
+  failed_when: false
+  # Not idempotent (community.general.pipx's documented limitation with
+  # `source`) -- shows "changed" every run even when nothing changed.
+
+- name: Report pipx-from-git installs that failed
+  ansible.builtin.debug:
+    msg: >-
+      pipx-from-git install failed for:
+      {{ pipx_git_result.results | selectattr('failed', 'defined') | selectattr('failed')
+         | map(attribute='item.name') | list }}
+  when: pipx_git_result.results is defined and pipx_git_result.results | selectattr('failed', 'defined') | selectattr('failed') | list | length > 0
+
+- name: Install general-purpose libraries into the shared ~/venv
+  ansible.builtin.pip:
+    name: "{{ venv_packages | reject('in', exclude_tools) | list }}"
+    virtualenv: "{{ venv_dir }}"
+    virtualenv_command: "python3 -m venv"
+
+- name: Install ldap3-bleeding_edge last, so it overrides plain ldap3
+  ansible.builtin.pip:
+    name: "{{ venv_packages_ldap3_override }}"
+    virtualenv: "{{ venv_dir }}"
+    virtualenv_command: "python3 -m venv"
+  when: venv_packages_ldap3_override not in exclude_tools

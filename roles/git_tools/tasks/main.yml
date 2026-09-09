@@ -1,0 +1,120 @@
+---
+- name: Ensure ~/tools exists
+  ansible.builtin.file:
+    path: "{{ git_tools_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Clone/update tool repositories at upstream HEAD
+  ansible.builtin.git:
+    repo: "{{ item.repo }}"
+    dest: "{{ git_tools_dir }}/{{ item.name }}"
+    version: HEAD
+    update: true
+    force: false
+    depth: 1
+  loop: "{{ git_tools | rejectattr('name', 'in', exclude_tools) | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: git_result
+  failed_when: false
+
+- name: Clone/update repositories that live outside ~/tools
+  ansible.builtin.git:
+    repo: "{{ item.repo }}"
+    dest: "{{ item.dest }}"
+    version: HEAD
+    update: true
+    force: false
+    depth: 1
+  loop: "{{ git_tools_extra | rejectattr('name', 'in', exclude_tools) | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: git_extra_result
+  failed_when: false
+
+- name: Report repositories that failed to clone
+  ansible.builtin.debug:
+    msg: >-
+      Failed to clone:
+      {{ (git_result.results + git_extra_result.results)
+         | selectattr('failed', 'defined') | selectattr('failed')
+         | map(attribute='item.name') | list }}
+
+# Per-repo build/bootstrap steps, each skipped if its output already exists.
+# Uses ansible.builtin.stat (a real module, runs on the managed host) rather
+# than a raw `is exists` Jinja test, which always evaluates on the
+# controller regardless of delegate_to.
+#
+# Everything except volatility3 (its own dedicated venv below) installs into
+# the shared ~/venv rather than a one-off per-repo .venv.
+- name: Check which repos ship a requirements.txt
+  ansible.builtin.stat:
+    path: "{{ git_tools_dir }}/{{ item }}/requirements.txt"
+  loop: "{{ git_tools | rejectattr('name', 'in', exclude_tools) | map(attribute='name') | reject('equalto', 'volatility3') | list }}"
+  loop_control:
+    label: "{{ item }}"
+  register: requirements_stat
+
+- name: Install each repo's requirements into the shared ~/venv
+  ansible.builtin.pip:
+    requirements: "{{ git_tools_dir }}/{{ item.item }}/requirements.txt"
+    virtualenv: "{{ venv_dir }}"
+    virtualenv_command: "python3 -m venv"
+  loop: "{{ requirements_stat.results | selectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+  register: venv_result
+  failed_when: false
+
+- name: Report repos whose requirements failed to install into the shared venv
+  ansible.builtin.debug:
+    msg: >-
+      Requirements install into shared venv failed for:
+      {{ venv_result.results | selectattr('failed', 'defined') | selectattr('failed')
+         | map(attribute='item.item') | list }}
+  when: venv_result.results is defined and venv_result.results | selectattr('failed', 'defined') | selectattr('failed') | list | length > 0
+
+- name: Check the volatility3 repo is present
+  ansible.builtin.stat:
+    path: "{{ git_tools_dir }}/volatility3"
+  register: volatility3_stat
+
+- name: Create a venv for volatility3 and install it with full extras
+  ansible.builtin.pip:
+    name: ".[full]"
+    chdir: "{{ git_tools_dir }}/volatility3"
+    editable: true
+    virtualenv: "{{ git_tools_dir }}/volatility3/volvenv"
+    virtualenv_command: "python3 -m venv"
+  when:
+    - "'volatility3' not in exclude_tools"
+    - volatility3_stat.stat.exists
+  register: volatility3_result
+  failed_when: false
+
+- name: Report if the volatility3 venv install failed
+  ansible.builtin.debug:
+    msg: "volatility3 venv install failed: {{ volatility3_result.msg | default(volatility3_result) }}"
+  when: volatility3_result is defined and volatility3_result is failed
+
+- name: Verify volvenv/bin/vol actually exists and is executable
+  ansible.builtin.stat:
+    path: "{{ git_tools_dir }}/volatility3/volvenv/bin/vol"
+  register: vol_bin_stat
+  when:
+    - "'volatility3' not in exclude_tools"
+    - volatility3_stat.stat.exists
+
+- name: Assert the volatility3 venv is actually usable
+  ansible.builtin.assert:
+    that:
+      - vol_bin_stat.stat.exists
+      - vol_bin_stat.stat.executable
+    fail_msg: >-
+      volvenv/bin/vol is missing or not executable -- the venv task above
+      reported success (or was silently skipped) but didn't actually produce
+      a working install.
+  when:
+    - "'volatility3' not in exclude_tools"
+    - volatility3_stat.stat.exists

@@ -1,0 +1,75 @@
+---
+artifacts_dir: "{{ playbook_dir }}/artifacts"
+
+# Community edition needs no licence; set pro only if you have one to activate.
+burpsuite_install: true
+burpsuite_edition: community    # community | pro
+
+go_bin_dir: "{{ ansible_env.HOME }}/go/bin"
+cargo_bin_dir: "{{ ansible_env.HOME }}/.cargo/bin"
+
+# Skipped by git_tools, python_tools (pipx), and lang_tools (cargo/go) --
+# matched against name/pipx package/cargo-go binary name. Lives here, not
+# the role vars files, so scripts/snapshot.sh doesn't clobber it.
+exclude_tools:
+  # pyrdp 2.1.0 imports `from typing import io`, removed in Python 3.13+.
+  - pyrdp-mitm
+  - nfs_security_tooling
+  - roadtools
+  - vipermonkey
+  - wsuks
+  # minrm is NOT here: it's a git_tools repo name too (gatariee/minrm), and
+  # exclude_tools is shared across roles.
+
+# For `import`ing directly in ad-hoc scripts (source ~/venv/bin/activate),
+# distinct from pipx_packages (each pipx tool gets its own isolated venv).
+# Some names overlap with pipx_packages (impacket, minidump, ippserver) --
+# intentional, different purposes.
+venv_dir: "{{ ansible_env.HOME }}/venv"
+venv_packages:
+  - impacket
+  - pypykatz
+  - pycryptodome
+  - ldap3
+  - ldapdomaindump
+  - aiosmb
+  - msldap
+  - minikerberos
+  - minidump
+  - pypsrp
+  - dissect.util
+  - python-evtx
+  - python-registry
+  - regipy
+  - analyzeMFT
+  - prefetch-parser
+  - windowsprefetch
+  - procmon-parser
+  - libesedb-python
+  - libscca-python
+  - aesedb
+  - oletools
+  - msoffcrypto-tool
+  - pcodedmp
+  - autoit-ripper
+  - jsbeautifier
+  - scapy
+  - pwncat-cs
+  - flask-unsign
+  - signxml
+  - PyJWT
+  - python-jose
+  - oathtool
+  - requests_ntlm
+  - pypdf
+  - docker
+  - boto3
+  - aws-assume-role-lib
+  - s3-account-search
+  - graphene
+  - fastapi
+  - pytest
+
+# Drop-in replacement for ldap3 (same import name), installed separately so
+# it deterministically overwrites plain ldap3's files.
+venv_packages_ldap3_override: ldap3-bleeding_edge

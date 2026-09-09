@@ -1,0 +1,38 @@
+---
+# Target defaults to the controller itself. Override for a remote VM:
+#   ansible-playbook site.yml -e target=kali
+- name: Provision a Kali workstation
+  hosts: "{{ target | default('local') }}"
+  gather_facts: true
+
+  vars:
+    skip_artifacts: false
+
+  pre_tasks:
+    - name: Refuse to run as root
+      ansible.builtin.fail:
+        msg: "Run as the normal user; tasks escalate with become where needed."
+      when: ansible_user_id == 'root'
+
+  roles:
+    - role: apt_repos
+      tags: [apt, repos]
+    - role: base_packages
+      tags: [apt, packages]
+    - role: python_tools
+      tags: [python, pipx]
+    - role: lang_tools
+      tags: [cargo, go]
+    - role: git_tools
+      tags: [git, tools]
+    - role: binary_tools
+      tags: [binaries, sdk]
+    - role: artifacts_sync
+      tags: [artifacts, payload]
+      when: not skip_artifacts
+    - role: dotfiles
+      tags: [dotfiles]
+    - role: claude
+      tags: [claude]
+    - role: system_tweaks
+      tags: [system, tweaks]

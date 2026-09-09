@@ -1,0 +1,177 @@
+---
+- name: Install Google Cloud SDK
+  ansible.builtin.unarchive:
+    src: https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz
+    dest: "{{ ansible_env.HOME }}/tools"
+    remote_src: true
+    creates: "{{ ansible_env.HOME }}/tools/google-cloud-sdk/bin/gcloud"
+
+- name: Install Azure CLI (bundled zip)
+  # Convenience fallback; the apt `azure-cli` package (microsoft-prod repo)
+  # is the primary install path.
+  ansible.builtin.unarchive:
+    src: https://azcliprod.blob.core.windows.net/cli-extensions/azure-cli-latest-x64.zip
+    dest: "{{ ansible_env.HOME }}/tools"
+    remote_src: true
+    creates: "{{ ansible_env.HOME }}/tools/azure-cli"
+  register: azure_zip_result
+  failed_when: false
+
+- name: Report if the Azure CLI zip fallback failed
+  ansible.builtin.debug:
+    msg: "Azure CLI zip fallback failed (apt azure-cli should still cover it): {{ azure_zip_result.msg | default(azure_zip_result) }}"
+  when: azure_zip_result is failed
+
+- name: Verify az is actually usable
+  ansible.builtin.command: az --version
+  register: az_version_check
+  changed_when: false
+  failed_when: false
+
+- name: Assert az is on PATH and runs
+  ansible.builtin.assert:
+    that: az_version_check.rc == 0
+    fail_msg: >-
+      `az --version` failed (rc={{ az_version_check.rc }}) -- neither the
+      apt azure-cli package nor the zip fallback produced a working az on
+      PATH. stderr: {{ az_version_check.stderr }}
+
+- name: Build hashcat from source
+  block:
+    - name: Clone hashcat
+      ansible.builtin.git:
+        repo: https://github.com/hashcat/hashcat.git
+        dest: "{{ ansible_env.HOME }}/tools/hashcat"
+        version: HEAD
+        update: true
+        depth: 1
+
+    - name: Compile hashcat
+      ansible.builtin.command:
+        cmd: make
+        chdir: "{{ ansible_env.HOME }}/tools/hashcat"
+        creates: "{{ ansible_env.HOME }}/tools/hashcat/hashcat"
+  rescue:
+    - name: Note that the hashcat build failed
+      ansible.builtin.debug:
+        msg: "hashcat build failed; the apt `hashcat` package is still installed."
+
+# BloodHound CE via bloodhound-cli. Collection is handled separately by the
+# pipx collectors (bloodhound-python / bloodhound-ce-python).
+- name: Install bloodhound-cli (BloodHound CE)
+  ignore_errors: true
+  block:
+    - name: Ensure ~/tools/bloodhound exists
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/tools/bloodhound"
+        state: directory
+        mode: "0755"
+
+    - name: Download and extract the latest bloodhound-cli
+      ansible.builtin.unarchive:
+        src: https://github.com/SpecterOps/bloodhound-cli/releases/latest/download/bloodhound-cli-linux-amd64.tar.gz
+        dest: "{{ ansible_env.HOME }}/tools/bloodhound"
+        remote_src: true
+        creates: "{{ ansible_env.HOME }}/tools/bloodhound/bloodhound-cli"
+
+    - name: Expose bloodhound-cli on PATH
+      become: true
+      ansible.builtin.file:
+        src: "{{ ansible_env.HOME }}/tools/bloodhound/bloodhound-cli"
+        dest: /usr/local/bin/bloodhound-cli
+        state: link
+
+- name: Ensure the docker CLI is installed
+  # docker.io only Recommends: docker-cli rather than Depends on it, and
+  # base_packages installs with install_recommends: false.
+  become: true
+  ansible.builtin.apt:
+    name: docker-cli
+    state: present
+
+- name: Enable the Docker service (bloodhound-cli deploys CE in containers)
+  become: true
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: true
+    state: started
+  failed_when: false
+
+# kali is deliberately NOT added to the docker group -- membership is
+# root-equivalent with no password at all (`docker run -v /:/host --rm -it
+# alpine chroot /host`). `docker`, `vol2`, and `bloodhound-cli` need `sudo`.
+
+- name: Restore /usr/local/{bin,sbin} to sudo's secure_path
+  # Kali's stock secure_path omits /usr/local/{bin,sbin}, unlike vanilla
+  # Debian, which breaks `sudo <tool>` by name for anything installed there
+  # (vol2, bloodhound-cli, BurpSuite). Grants no new capability -- sudo
+  # still needs root's password -- just restores where it looks.
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/91-secure-path-local
+    content: "Defaults secure_path=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"\n"
+    mode: "0440"
+    validate: "visudo -cf %s"
+
+- name: Set up the volatility2 Docker image
+  # Volatility 2 needs Python 2, unavailable on modern Kali/Debian --
+  # containerized instead. Pulls blacktop/volatility rather than building it
+  # (smaller, no compile step, matches upstream vol2 2.6.1).
+  block:
+    - name: Pull the volatility2 image
+      become: true
+      ansible.builtin.command:
+        cmd: docker pull blacktop/volatility:latest
+      register: vol2_pull
+      changed_when: "'Downloaded newer image' in vol2_pull.stdout"
+      failed_when: vol2_pull.rc != 0
+
+    - name: Report if the volatility2 image pull failed
+      ansible.builtin.debug:
+        msg: "volatility2 Docker pull failed: {{ vol2_pull.stderr | default(vol2_pull) }}"
+      when: vol2_pull is defined and vol2_pull is failed
+
+    - name: Install the vol2 wrapper script on PATH
+      become: true
+      ansible.builtin.copy:
+        src: volatility2/vol2
+        dest: /usr/local/bin/vol2
+        mode: "0755"
+  # Best-effort: an unreachable Docker Hub shouldn't abort the rest of
+  # provisioning.
+  ignore_errors: true
+
+- name: Install current Burp Suite from PortSwigger (not the stale apt package)
+  when: burpsuite_install | bool
+  block:
+    - name: Purge the stale apt burpsuite already in the base image
+      become: true
+      ansible.builtin.apt:
+        name: burpsuite
+        state: absent
+        purge: true
+        autoremove: true
+
+    - name: Download the current Burp installer
+      ansible.builtin.get_url:
+        url: "https://portswigger.net/burp/releases/download?product={{ burpsuite_edition }}&type=Linux"
+        dest: /tmp/burpsuite_installer.sh
+        mode: "0755"
+      register: burp_download
+      retries: 3
+      delay: 10
+      until: burp_download is succeeded
+
+    - name: Silent-install Burp into /opt/BurpSuite (bundled JRE, unattended)
+      become: true
+      ansible.builtin.command:
+        cmd: sh /tmp/burpsuite_installer.sh -q -dir /opt/BurpSuite -overwrite
+        # Launcher script is named BurpSuite<Edition>, e.g. BurpSuiteCommunity.
+        creates: "/opt/BurpSuite/BurpSuite{{ burpsuite_edition | capitalize }}"
+
+    - name: Expose the BurpSuite launcher on PATH
+      become: true
+      ansible.builtin.file:
+        src: "/opt/BurpSuite/BurpSuite{{ burpsuite_edition | capitalize }}"
+        dest: /usr/local/bin/BurpSuite
+        state: link

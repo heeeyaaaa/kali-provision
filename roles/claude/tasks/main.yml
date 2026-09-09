@@ -1,0 +1,9 @@
+---
+- name: Install Claude Code (native installer)
+  ansible.builtin.shell:
+    cmd: curl -fsSL https://claude.ai/install.sh | bash
+    creates: "{{ ansible_env.HOME }}/.local/bin/claude"
+  # Installs to ~/.local/share/claude/versions/, symlinked at ~/.local/bin/claude
+  # (already on PATH via the dotfiles block). Default install only -- no
+  # skills/settings deployed here; run `claude` once on the VM to authenticate
+  # and configure it to your own preferences.

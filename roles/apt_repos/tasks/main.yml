@@ -1,0 +1,73 @@
+---
+- name: Ensure keyring directory exists
+  become: true
+  ansible.builtin.file:
+    path: /usr/share/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Install third-party repository signing keys
+  become: true
+  ansible.builtin.get_url:
+    url: "{{ item.url }}"
+    dest: "{{ item.dest }}"
+    mode: "0644"
+  register: keyring_download
+  retries: 3
+  delay: 5
+  until: keyring_download is succeeded
+  loop:
+    - url: https://cli.github.com/packages/githubcli-archive-keyring.gpg
+      dest: /usr/share/keyrings/githubcli-archive-keyring.gpg
+    - url: https://packages.microsoft.com/keys/microsoft.asc
+      dest: /usr/share/keyrings/microsoft-prod.asc
+    - url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+      dest: /usr/share/keyrings/nodesource.asc
+  loop_control:
+    label: "{{ item.dest | basename }}"
+
+- name: Configure third-party apt repositories
+  become: true
+  ansible.builtin.deb822_repository:
+    name: "{{ item.name }}"
+    types: deb
+    uris: "{{ item.uris }}"
+    suites: "{{ item.suites }}"
+    components: "{{ item.components }}"
+    architectures: "{{ item.architectures }}"
+    signed_by: "{{ item.signed_by }}"
+    state: present
+    # install_python_debian defaults to false on this ansible-core version;
+    # without it the module refuses to run instead of apt-installing its own
+    # python3-debian dependency, and this role runs before base_packages so
+    # it can't rely on that role having installed it already.
+    install_python_debian: true
+  loop:
+    - name: github-cli
+      uris: https://cli.github.com/packages
+      suites: stable
+      components: main
+      architectures: amd64
+      signed_by: /usr/share/keyrings/githubcli-archive-keyring.gpg
+    - name: microsoft-prod
+      uris: https://packages.microsoft.com/ubuntu/22.04/prod
+      suites: jammy
+      components: main
+      architectures: amd64
+      signed_by: /usr/share/keyrings/microsoft-prod.asc
+    - name: nodesource
+      uris: https://deb.nodesource.com/node_20.x
+      suites: nodistro
+      components: main
+      architectures: amd64
+      signed_by: /usr/share/keyrings/nodesource.asc
+  loop_control:
+    label: "{{ item.name }}"
+  notify: Refresh apt cache
+
+- name: Update apt cache
+  # No cache_valid_time: the repos above were just added and still need
+  # indexing regardless of how recently apt last updated.
+  become: true
+  ansible.builtin.apt:
+    update_cache: true

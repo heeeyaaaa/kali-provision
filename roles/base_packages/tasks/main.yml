@@ -1,0 +1,31 @@
+---
+- name: Install apt packages
+  become: true
+  ansible.builtin.apt:
+    name: "{{ apt_packages | difference(['burpsuite']) }}"  # Burp comes from binary_tools
+    state: present
+    install_recommends: false
+  register: apt_bulk
+  ignore_errors: true
+
+# A bulk install aborts entirely if any single name is unresolvable on a newer
+# Kali snapshot. Fall back to one-by-one so the rest still lands, and report
+# exactly which names failed.
+- name: Fall back to per-package install when the bulk transaction failed
+  when: apt_bulk is failed
+  block:
+    - name: Install apt packages individually
+      become: true
+      ansible.builtin.apt:
+        name: "{{ item }}"
+        state: present
+        install_recommends: false
+      loop: "{{ apt_packages | difference(['burpsuite']) }}"
+      register: apt_each
+      failed_when: false
+
+    - name: Report packages that could not be installed
+      ansible.builtin.debug:
+        msg: >-
+          Unavailable on this Kali release:
+          {{ apt_each.results | selectattr('failed') | map(attribute='item') | list }}

@@ -1,0 +1,2 @@
+# Payload tarballs are large binaries -- track them with git-lfs.
+artifacts/*.tar.zst filter=lfs diff=lfs merge=lfs -text

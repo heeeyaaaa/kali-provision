@@ -1,0 +1,52 @@
+---
+# Run this ONCE against a freshly installed Kali VM, before site.yml.
+# It only needs password auth; everything after it uses the SSH key.
+#
+#   ansible-playbook -i inventory.ini bootstrap.yml -l kali -k -K
+#
+- name: Bootstrap a fresh Kali VM for Ansible
+  hosts: kali
+  gather_facts: false
+
+  vars:
+    ssh_public_key: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_ed25519.pub') }}"
+    # Kali's official images ship root locked (no password). Override with
+    # -e root_password=... if you've changed kali's own password already.
+    root_password: "kali"
+
+  tasks:
+    - name: Wait for the VM to accept SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 120
+
+    - name: Ensure python3 and sudo are present
+      become: true
+      become_method: sudo   # root has no password yet
+      ansible.builtin.raw: test -e /usr/bin/python3 || (apt-get update && apt-get install -y python3 sudo)
+      changed_when: false
+
+    - name: Gather facts now that python3 exists
+      ansible.builtin.setup:
+
+    - name: Install the controller's public key
+      ansible.posix.authorized_key:
+        user: "{{ ansible_user }}"
+        key: "{{ ssh_public_key }}"
+        state: present
+
+    - name: Set root's password so su-based escalation has something to authenticate against
+      become: true
+      # Must be sudo, not the su ansible.cfg defaults every other become to:
+      # root has no password yet, so su-ing to root to set root's password
+      # is a deadlock. Uses kali's own stock sudo group membership instead.
+      become_method: sudo
+      ansible.builtin.user:
+        name: root
+        password: "{{ root_password | password_hash('sha512') }}"
+        update_password: always
+
+    - name: Report readiness
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} ready.
+          Now run: ansible-playbook site.yml -e target=kali

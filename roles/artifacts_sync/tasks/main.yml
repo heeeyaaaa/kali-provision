@@ -1,0 +1,133 @@
+---
+- name: Ensure zstd is available
+  become: true
+  ansible.builtin.apt:
+    name: zstd
+    state: present
+
+- name: Check which payload archives are present
+  # artifacts_dir is a controller-side path; without delegate_to: localhost
+  # this runs on the managed node and always reports "missing".
+  delegate_to: localhost
+  become: false
+  ansible.builtin.stat:
+    path: "{{ artifacts_dir }}/{{ item.archive }}"
+  loop: "{{ artifact_payloads }}"
+  loop_control:
+    label: "{{ item.archive }}"
+  register: payload_stat
+
+- name: Fail early if payload archives are missing
+  ansible.builtin.fail:
+    msg: >-
+      Missing payload archive(s):
+      {{ payload_stat.results | rejectattr('stat.exists') | map(attribute='item.archive') | list }}.
+      Run scripts/snapshot.sh on the source machine, or set skip_artifacts=true.
+  when: payload_stat.results | rejectattr('stat.exists') | list | length > 0
+
+- name: Unpack payload archives
+  ansible.builtin.unarchive:
+    src: "{{ artifacts_dir }}/{{ item.archive }}"
+    dest: "{{ item.dest }}"
+    creates: "{{ item.creates }}"
+    extra_opts: ["--zstd"]
+  loop: "{{ artifact_payloads }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Restore executable bits on payload binaries
+  ansible.builtin.shell:
+    cmd: >-
+      find "{{ ansible_env.HOME }}/Downloads"
+      -type f \( -name '*.exe' -o -name '*.sh' -o -name '*.elf' \)
+      -exec chmod u+x {} +
+  changed_when: false
+
+# ad1tools depends on libfuse2, retired on current Kali in favor of
+# libfuse2t64 (Provides: libfuse2). Must happen before ad1tools installs
+# below, via ansible.builtin.apt rather than raw `dpkg -i` so it can pull in
+# anything libfuse2t64 itself needs.
+- name: Install libfuse2t64 (provides libfuse2, needed by ad1tools)
+  become: true
+  ansible.builtin.apt:
+    deb: https://ftp.debian.org/debian/pool/main/f/fuse/libfuse2t64_2.9.9-9+b2_amd64.deb
+    state: present
+  failed_when: false
+
+# These .debs ship inside the payload, so they can only be installed once it
+# is unpacked -- hence here rather than in base_packages.
+- name: Install local .deb packages from the payload
+  become: true
+  ansible.builtin.command:
+    cmd: dpkg -i "{{ item.path }}"
+  loop: "{{ apt_local_debs }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: local_deb_result
+  changed_when: local_deb_result.rc == 0
+  failed_when: false
+
+- name: Report local .deb packages that failed to install
+  ansible.builtin.debug:
+    msg: >-
+      Local .deb install failed for:
+      {{ local_deb_result.results | selectattr('failed', 'defined') | selectattr('failed')
+         | map(attribute='item.name') | list }}
+  when: local_deb_result.results | selectattr('failed', 'defined') | selectattr('failed') | list | length > 0
+
+- name: Resolve any dependencies dpkg -i couldn't
+  # Unlike `apt install ./pkg.deb`, plain `dpkg -i` doesn't resolve missing
+  # dependencies -- a package needing any is left "install ok unpacked".
+  become: true
+  ansible.builtin.apt:
+    state: fixed
+  changed_when: false
+  failed_when: false
+
+- name: Gather installed package facts
+  ansible.builtin.package_facts:
+    manager: apt
+
+- name: Purge local .debs whose dependencies can never be satisfied
+  # A package left "unpacked, not configured" blocks apt from installing
+  # anything else on the box -- purge outright rather than leave it
+  # half-installed. Defensive fallback; the libfuse2t64 install above should
+  # make this a no-op for ad1tools.
+  become: true
+  ansible.builtin.apt:
+    name: "{{ item.name }}"
+    state: absent
+    purge: true
+  loop: "{{ apt_local_debs }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.name not in ansible_facts.packages
+  failed_when: false
+
+# combined.txt travels in the downloads payload; place it where wordlist-driven
+# tools look by default.
+- name: Install combined.txt into the system wordlists dir
+  become: true
+  ansible.builtin.copy:
+    src: "{{ ansible_env.HOME }}/Downloads/combined.txt"
+    dest: /usr/share/wordlists/combined.txt
+    remote_src: true
+    mode: "0644"
+
+# Custom binaries with no apt package: GDRE tools, pycdc, utmdump, kerbrute.
+# Rooted at / so the archive restores exact paths and executable bits.
+- name: Check the system-bins payload is present
+  delegate_to: localhost
+  become: false
+  ansible.builtin.stat:
+    path: "{{ artifacts_dir }}/system-bins.tar.zst"
+  register: sysbins_stat
+
+- name: Install custom system binaries into /usr/bin and /usr/local/bin
+  become: true
+  ansible.builtin.unarchive:
+    src: "{{ artifacts_dir }}/system-bins.tar.zst"
+    dest: /
+    creates: /usr/bin/gdre_tools.x86_64
+    extra_opts: ["--zstd"]
+  when: sysbins_stat.stat.exists
