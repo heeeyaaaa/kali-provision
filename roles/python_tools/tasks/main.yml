@@ -14,11 +14,11 @@
   community.general.pipx:
     name: "{{ item.name }}"
     state: latest
-  # donpapi/sccmhunter/netexec get their own dedicated git-source install
-  # below instead (no PyPI package resolves under these names) -- rejected
-  # here explicitly rather than via exclude_tools, so exclude_tools stays
-  # free without colliding with the dedicated task below.
-  loop: "{{ pipx_packages | rejectattr('name', 'in', exclude_tools) | rejectattr('name', 'in', ['donpapi', 'sccmhunter', 'netexec']) | list }}"
+  # donpapi/sccmhunter/netexec/evil-winrm-py get their own dedicated
+  # git-source install below instead -- rejected here explicitly rather than
+  # via exclude_tools, so exclude_tools stays free without colliding with
+  # the dedicated task below.
+  loop: "{{ pipx_packages | rejectattr('name', 'in', exclude_tools) | rejectattr('name', 'in', ['donpapi', 'sccmhunter', 'netexec', 'evil-winrm-py']) | list }}"
   loop_control:
     label: "{{ item.name }} (was {{ item.seen_version }})"
   register: pipx_result
@@ -54,7 +54,7 @@
   # Kali's apt netexec lags upstream; the current release from GitHub via
   # pipx (below) is the preferred path.
 
-- name: Install donpapi, sccmhunter, and netexec from their GitHub repos via pipx
+- name: Install donpapi, sccmhunter, netexec, and evil-winrm-py from their GitHub repos via pipx
   community.general.pipx:
     name: "{{ item.name }}"
     source: "{{ item.source }}"
@@ -63,6 +63,7 @@
     - { name: donpapi, source: "git+https://github.com/login-securite/DonPAPI.git" }
     - { name: sccmhunter, source: "git+https://github.com/garrettfoster13/sccmhunter/" }
     - { name: netexec, source: "git+https://github.com/Pennyw0rth/NetExec" }
+    - { name: evil-winrm-py, source: "evil-winrm-py[kerberos] @ git+https://github.com/adityatelange/evil-winrm-py" }
   loop_control:
     label: "{{ item.name }}"
   when: item.name not in exclude_tools

@@ -211,8 +211,10 @@ so anything Kali already ships by default isn't re-listed here).
 
 Each gets its own isolated venv (see [`~/venv`](#directory-reference) above for
 why this is different from the shared venv). Most install straight from PyPI;
-`donpapi`, `sccmhunter`, and `netexec` install from their GitHub repos instead
-(no working PyPI package, or Kali's apt version lags upstream too far).
+`donpapi`, `sccmhunter`, `netexec`, and `evil-winrm-py` install from their
+GitHub repos instead (no working PyPI package, Kali's apt version lags
+upstream too far, or -- for `evil-winrm-py` -- to pull in the `[kerberos]`
+extra).
 
 | Package | What it's for |
 |---|---|
@@ -224,7 +226,7 @@ why this is different from the shared venv). Most install straight from PyPI;
 | `coercer` | trigger authentication coercion (PetitPotam-family) against Windows hosts |
 | `donpapi` | (git source) dump DPAPI secrets remotely |
 | `sccmhunter` | (git source) enumerate and attack Microsoft SCCM/ConfigMgr |
-| `evil-winrm-py` | WinRM shell client |
+| `evil-winrm-py` | (git source, `[kerberos]` extra) WinRM shell client |
 | `regipy` | Windows registry hive parsing (Python library + CLI) |
 | `oletools` | analyze OLE/Office documents for malicious macros |
 | `pyrdp-mitm` | RDP man-in-the-middle proxy (broken on Python 3.14 upstream -- excluded, see `exclude_tools`) |
